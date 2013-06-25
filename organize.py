@@ -9,12 +9,21 @@ import subprocess
 import sys
 import tempfile
 
-from mutagen.id3 import ID3
+from mutagen.id3 import ID3, TIT2, TRCK, TPE1, TALB, TDRC, ID3TimeStamp
+from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 
-# LAME VBR quality setting (0 is highest quality, 9 is smallest file)
+# Lame VBR quality setting (0 is highest quality, 9 is smallest file)
 QUALITY=1
 VERBOSE=False
+
+# Perform the following replacements on generated filename parts
+FILENAME_REPLACE = (
+    ('/', '-')
+)
+
+# Delete the following characters from generated filename parts
+FILENAME_DELETE = '\'"?'
 
 def error(*args):
     sys.stderr.write(''.join(map(str, args)) + '\n')
@@ -69,13 +78,13 @@ def tags_id3(filename):
             break
 
     # Cast all the mutagen tags to unicode
-    for tag in tags:
-        if tags[tag]:
-            tags[tag] = unicode(tags[tag])
+    for tag, value in tags.items():
+        if value:
+            tags[tag] = unicode(value)
 
     return tags
 
-def tags_metaflac(filename):
+def tags_flac(filename):
     audio = FLAC(filename)
 
     tags = {
@@ -93,6 +102,22 @@ def tags_metaflac(filename):
             tags[tag] = tags[tag][0]
 
     return tags
+
+def write_tags(filename, tags):
+    audio = MP3(filename)
+    audio.add_tags()
+
+    audio.tags.add(TPE1(3, tags['artist']))
+    audio.tags.add(TALB(3, tags['album']))
+    audio.tags.add(TIT2(3, tags['title']))
+
+    if tags.get('track'):
+        audio.tags.add(TRCK(0, unicode(tags['track'])))
+
+    if tags.get('date'):
+        audio.tags.add(TDRC(0, tags['date']))
+
+    audio.save()
 
 def normalize_tags(tags):
     tags_copy = tags.copy()
@@ -112,14 +137,23 @@ def normalize_tags(tags):
             if match:
                 tags_copy['date'] = match.group()
 
+    for tag in tags_copy:
+        if isinstance(tags_copy[tag], basestring):
+            tags_copy[tag] = tags_copy[tag].strip()
+
     return tags_copy
 
+def sanitize_filename_part(part):
+    for char_from, char_to in FILENAME_REPLACE:
+        part = part.replace(char_from, char_to)
+    return re.sub('[' + re.escape(FILENAME_DELETE) + ']', '', part)
+
 def generate_filename(tags, is_various):
-    artist = 'Various Artists' if is_various else tags.get('artist').replace('/', '-')
-    album = tags.get('album').replace('/', '-')
-    title = tags.get('title').replace('/', '-')
-    date = tags.get('date')
-    track = tags.get('track')
+    artist = 'Various Artists' if is_various else sanitize_filename_part(tags.get('artist'))
+    album = sanitize_filename_part(tags.get('album'))
+    title = sanitize_filename_part(tags.get('title'))
+    date = sanitize_filename_part(tags.get('date'))
+    track = sanitize_filename_part(tags.get('track'))
 
     dir_name = os.path.join(artist, album)
 
@@ -134,7 +168,7 @@ def generate_filename(tags, is_various):
     full_name = os.path.join(dir_name, file_name)
 
     # Remove some funky characters
-    return re.sub(r'''['"?]''', '', full_name)
+    return full_name
 
 def maketemp(suffix=''):
     handle, filename = tempfile.mkstemp(suffix)
@@ -153,28 +187,14 @@ def decode_flac(filename):
         os.unlink(decoded_filename)
         raise
 
-def encode_mp3(source_wav_filename, dest_filename, tags):
-    args = ['--id3v2-only', '-V', str(QUALITY), '--quiet',
-            '--tt', tags.get('title'),
-            '--ta', tags.get('artist'),
-            '--tl', tags.get('album')]
+def encode_mp3(source_wav_filename, dest_filename):
+    get_output('lame', '-V', str(QUALITY), '--quiet', source_wav_filename, dest_filename)
 
-    if tags.get('date'):
-        args.extend(['--ty', tags.get('date')])
-
-    if tags.get('track'):
-        args.extend(['--tn', str(tags.get('track'))])
-
-    args.append(source_wav_filename)
-    args.append(dest_filename)
-
-    get_output('lame', *args)
-
-def transcode_flac(source_filename, dest_filename, tags):
+def transcode_flac(source_filename, dest_filename):
     decoded = decode_flac(source_filename)
 
     try:
-        encode_mp3(decoded, dest_filename, tags)
+        encode_mp3(decoded, dest_filename)
     finally:
         os.unlink(decoded)
 
@@ -199,7 +219,7 @@ for source_file in find_files(source_dir, 'flac', 'mp3'):
     ext = get_ext(source_file)
 
     if ext == 'flac':
-        tags = tags_metaflac(source_file)
+        tags = tags_flac(source_file)
     else:
         tags = tags_id3(source_file)
 
@@ -257,7 +277,8 @@ for source_file, ext, tags in inputs:
     try:
         if ext == 'flac':
             print 'Transcoding', dest_file, 'from', source_file
-            transcode_flac(source_file, dest_file, tags)
+            transcode_flac(source_file, dest_file)
+            write_tags(dest_file, tags)
         else:
             print 'Copying', dest_file, 'from', source_file
             copy(source_file, dest_file)
