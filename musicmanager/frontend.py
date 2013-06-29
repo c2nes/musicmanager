@@ -315,6 +315,10 @@ class MusicManagerCli(object):
             old_dir = os.path.dirname(source_file)
             new_dir = os.path.dirname(dest_file)
 
+            if dest_ext == 'mp3' and tags.get('channels', 0) > 2:
+                self.info('Skipping ', source_file, ', too many channels')
+                continue
+
             # Remove existing targets with --force, otherwise skip
             if os.path.exists(dest_file):
                 if args.force:
