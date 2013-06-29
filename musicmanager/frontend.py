@@ -105,7 +105,7 @@ class MusicManagerCli(object):
 
         # Album
         if fields.get('date'):
-            path_parts.append('%(album)s %(date)s' % fields)
+            path_parts.append('%(album)s [%(date)s]' % fields)
         else:
             path_parts.append('%(album)s' % fields)
 
